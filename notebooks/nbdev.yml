@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "legisph"
+  site-url: "https://tjpalanca.com/legisph"
+  description: "Legislative Analysis of the Philippines"
+  repo-branch: master
+  repo-url: "https://github.com/tjpalanca/legisph.git"

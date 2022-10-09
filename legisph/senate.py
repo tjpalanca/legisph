@@ -17,11 +17,13 @@ from urllib.parse import urljoin, urlencode, parse_qsl, urlparse
 from more_itertools import split_when, grouper
 from pathlib import Path
 from diskcache import Cache
+from fastcore.utils import patch
+from nbdev.showdoc import show_doc
 
 from .website import Website, NotFoundError, ServerError, Link
 from .core import logger
 
-# %% ../notebooks/02-senate.ipynb 4
+# %% ../notebooks/02-senate.ipynb 5
 class Senator(BaseModel):
     """A member of the Senate"""
 
@@ -35,7 +37,7 @@ class Senator(BaseModel):
             return False
         return self.name == other.name
 
-# %% ../notebooks/02-senate.ipynb 6
+# %% ../notebooks/02-senate.ipynb 8
 class SenateCommittee(BaseModel):
     """A committee in the Senate"""
 
@@ -50,7 +52,7 @@ class SenateCommittee(BaseModel):
             return False
         return self.name == other.name
 
-# %% ../notebooks/02-senate.ipynb 8
+# %% ../notebooks/02-senate.ipynb 11
 class SenateBill(BaseModel):
     """
     These are general measures, which if passed upon, may become laws.
@@ -112,7 +114,7 @@ class SenateBill(BaseModel):
     def __repr__(self):
         return black.format_str(super().__repr__(), mode=black.Mode())
 
-# %% ../notebooks/02-senate.ipynb 9
+# %% ../notebooks/02-senate.ipynb 13
 class SenateWebsite(Website):
     """
     The Senate Website, accessible at [senate.gov.ph](https://senate.gov.ph/).
@@ -121,277 +123,309 @@ class SenateWebsite(Website):
     def __init__(self, cache_dir=Path(".cache/senate"), **kwargs):
         super().__init__("senate_requests", cache_dir=cache_dir, **kwargs)
         self.cache = Cache(str(cache_dir / "senate_cache"))
+        if hasattr(self, "fetch_bills"):
+            self.fetch_bills = self.cache.memoize(ignore=["self"])(self.fetch_bills)
 
-    def fetch_bill(self, congress: int, billno: str):
-        """Retrieve a SenateBill from the website."""
+# %% ../notebooks/02-senate.ipynb 15
+@patch
+def fetch_bill(
+    self: SenateWebsite,
+    congress: int,  # Congress Number
+    billno: str,  # Bill number (in the format SBN-XXXX)
+) -> requests.Response:
+    # Initial parameters
+    url = "http://legacy.senate.gov.ph/lis/bill_res.aspx"
+    params = {"q": billno, "congress": congress}
 
-        # Initial parameters
-        url = "http://legacy.senate.gov.ph/lis/bill_res.aspx"
-        params = {"q": billno, "congress": congress}
+    # Initial call to get form session parameters
+    resp = self.session.get(url=url, params=params)
+    html = BeautifulSoup(resp.text, features="html5lib")
 
-        # Initial call to get form session parameters
-        resp = self.session.get(url=url, params=params)
-        html = BeautifulSoup(resp.text, features="html5lib")
+    # Handle error cases
+    content_str = html.find("td", {"id": "content"}).text.strip()
+    resource = f"Senate Bill {billno} in Congress {congress}"
+    match content_str:
+        case "Not found.":
+            raise NotFoundError(f"{resource} not found", resource)
+        case "An error has occured. Exception has been logged.":
+            raise ServerError(f"Internal Error for {resource}", resource)
 
-        # Handle error cases
-        content_str = html.find("td", {"id": "content"}).text.strip()
-        resource = f"Senate Bill {billno} in Congress {congress}"
-        match content_str:
-            case "Not found.":
-                raise NotFoundError(f"{resource} not found", resource)
-            case "An error has occured. Exception has been logged.":
-                raise ServerError(f"Internal Error for {resource}", resource)
+    # Access the form data
+    form = html.find(name="form", attrs={"name": "form1"})
+    inputs = form.find_all(name="input")
+    data = {i["id"]: i.attrs.get("value", "") for i in inputs}
 
-        # Access the form data
-        form = html.find(name="form", attrs={"name": "form1"})
-        inputs = form.find_all(name="input")
-        data = {i["id"]: i.attrs.get("value", "") for i in inputs}
+    # Set to fetch all information
+    data.update({"__EVENTTARGET": "lbAll", "__EVENTARGUMENT": ""})
 
-        # Set to fetch all information
-        data.update({"__EVENTTARGET": "lbAll", "__EVENTARGUMENT": ""})
+    # Fetch bill information
+    resp = self.session.post(url=url, params=params, data=data)
 
-        # Fetch bill information
-        resp = self.session.post(url=url, params=params, data=data)
+    # Break into parts
+    html = BeautifulSoup(resp.text, features="html5lib")
+    content = html.find("td", attrs={"id": "content"})
+    title = list(islice(content.children, 5))
+    data = {
+        item.find_previous().text.strip(): item
+        for item in content.find_all("blockquote", recursive=False)
+    }
 
-        # Break into parts
-        html = BeautifulSoup(resp.text, features="html5lib")
-        content = html.find("td", attrs={"id": "content"})
-        title = list(islice(content.children, 5))
-        data = {
-            item.find_previous().text.strip(): item
-            for item in content.find_all("blockquote", recursive=False)
-        }
+    # Parse through complex votes table
+    votes = data.get("Vote(s)")
+    if votes:
 
-        # Parse through complex votes table
-        votes = data.get("Vote(s)")
-        if votes:
-
-            def parse_tally(votes):
-                tally = {}
-                for vote in votes:
-                    elems = vote.find_all("td")
-                    tally = tally | {
-                        vote.text.strip(): (
-                            [
-                                Senator(name=voter.text.strip())
-                                for voter in voters.find("blockquote").children
-                                if voter.text.strip() != ""
-                            ]
-                            if vote.text.strip() != "Abstained"
-                            else [
-                                Senator(name=f"{senator[0]}, {senator[1]}")
-                                for senator in grouper(
-                                    voters.text.strip().split(", "), 2
-                                )
-                            ]
-                        )
-                        for vote, voters in zip(
-                            elems[0 : (len(elems) // 2)],
-                            elems[len(elems) // 2 : len(elems) + 1],
-                        )
-                    }
-                return tally
-
-            elems = (e for e in votes.children if not isinstance(e, NavigableString))
-            votes = list(split_when(elems, lambda _, y: y.name == "blockquote"))
-            votes = [
-                SenateBill.Vote(
-                    type=vote[0].text.split("(")[0].strip(),
-                    date=datetime.datetime.strptime(
-                        vote[0].text.split("(")[1].replace(")", ""), "%m/%d/%Y"
-                    ),
-                    tally=parse_tally(vote[1:]),
-                )
-                for vote in votes
-            ]
-
-        # Parse subtitle
-        subtitle = title[4].text.strip()
-        subtitle = subtitle.split("Filed on ")[1].split(" by")
-
-        # Construct Senate Bill
-        bill = SenateBill(
-            url=url + "?" + urlencode(params),
-            congress=congress,
-            billno=billno,
-            congress_text=title[0].text.strip(),
-            billno_text=title[2].text.strip(),
-            title=content.find("div", class_="lis_doctitle").text.strip(),
-            long_title=data["Long title"].text.strip(),
-            filing_date=datetime.datetime.strptime(subtitle[0], "%B %d, %Y"),
-            filers=(
-                [
-                    Senator(name=f"{s[0]}, {s[1]}".strip())
-                    for s in grouper(subtitle[1].split(", "), 2)
-                ]
-                if subtitle[1] != ""
-                else None
-            ),
-            links=(
-                [
-                    Link(url=urljoin(url, t["href"]), name=t.text.strip())
-                    for t in links.find_all("a")
-                ]
-                if (links := content.find("div", id="lis_download"))
-                else None
-            ),
-            scope=data["Scope"].text.strip(),
-            legislative_status=SenateBill.SenateBillStatus(
-                date=datetime.datetime.strptime(
-                    re.findall(
-                        r"\((.+)\)", (s := data["Legislative status"].text.strip())
-                    )[0],
-                    "%m/%d/%Y",
-                ),
-                item=re.findall(r"(.+) \(", s)[0],
-            ),
-            subjects=(
-                [
-                    SenateBill.Subject(name=subject.text)
-                    for subject in subjects
-                    if subject.text != ""
-                ]
-                if (subjects := data.get("Subject(s)"))
-                else None
-            ),
-            primary_committee=(
-                [
-                    SenateCommittee(name=committee.text, congress=congress)
-                    for committee in committees.children
-                    if committee.text != ""
-                ]
-                if (committees := data.get("Primary committee"))
-                else None
-            ),
-            secondary_committee=(
-                [
-                    SenateCommittee(name=committee.text, congress=congress)
-                    for committee in committees.children
-                    if committee.text != ""
-                ]
-                if (committees := data.get("Secondary committee"))
-                else None
-            ),
-            committee_reports=(
-                [
-                    Link(url=urljoin(url, report["href"]), name=report.text)
-                    for report in reports.find_all("a")
-                ]
-                if (reports := data.get("Committee report"))
-                else None
-            ),
-            sponsors=(
-                [
-                    Senator(name=f"{senator[0]}, {senator[1]}")
-                    for senator in grouper(sponsors.text.split(", "), 2)
-                ]
-                if (sponsors := data.get("Sponsor(s)"))
-                else None
-            ),
-            cosponsors=(
-                [
-                    Senator(name=f"{senator[0]}, {senator[1]}")
-                    for senator in grouper(cosponsors.text.split(", "), 2)
-                ]
-                if (cosponsors := data.get("Co-sponsor(s)"))
-                else None
-            ),
-            document_certification=(
-                certification.text
-                if (certification := data.get("Document certification"))
-                else None
-            ),
-            floor_activity=(
-                [
-                    SenateBill.FloorActivity(
-                        date=datetime.datetime.strptime(
-                            cols[0].text.strip(), "%m/%d/%Y"
-                        ),
-                        parliamentary_status=cols[1].text.strip(),
-                        senators=(
-                            [
-                                Senator(name=senator.text.strip())
-                                for senator in cols[2].children
-                                if senator.text.strip() != ""
-                            ]
-                            if len(list(cols[2].children)) > 0
-                            else None
-                        ),
+        def parse_tally(votes):
+            tally = {}
+            for vote in votes:
+                elems = vote.find_all("td")
+                tally = tally | {
+                    vote.text.strip(): (
+                        [
+                            Senator(name=voter.text.strip())
+                            for voter in voters.find("blockquote").children
+                            if voter.text.strip() != ""
+                        ]
+                        if vote.text.strip() != "Abstained"
+                        else [
+                            Senator(name=f"{senator[0]}, {senator[1]}")
+                            for senator in grouper(voters.text.strip().split(", "), 2)
+                        ]
                     )
-                    for cols in [
-                        row.find_all("td") for row in floor_activity.find_all("tr")
-                    ][1:]
-                ]
-                if (floor_activity := data.get("Floor activity"))
-                else None
-            ),
-            votes=votes,
-            legislative_history=[
-                SenateBill.SenateBillStatus(
-                    date=datetime.datetime.strptime(row[0].text.strip(), "%m/%d/%Y"),
-                    item=row[1].text.strip(),
-                )
-                for row in (
-                    row.find_all("td")
-                    for row in data["Legislative History"].find_all("tr")
-                )
-                if len(row) == 2
-            ],
-        )
+                    for vote, voters in zip(
+                        elems[0 : (len(elems) // 2)],
+                        elems[len(elems) // 2 : len(elems) + 1],
+                    )
+                }
+            return tally
 
-        return bill
-
-    def generate_bills(self, congress: int):
-        """
-        Generator function that eventually produces all bills from a congress.
-        """
-
-        page = 1
-        while True:
-            # Fetch and parse the page
-            resp = self.session.get(
-                url="http://legacy.senate.gov.ph/lis/leg_sys.aspx",
-                params={"type": "bill", "congress": congress, "p": page},
+        elems = (e for e in votes.children if not isinstance(e, NavigableString))
+        votes = list(split_when(elems, lambda _, y: y.name == "blockquote"))
+        votes = [
+            SenateBill.Vote(
+                type=vote[0].text.split("(")[0].strip(),
+                date=datetime.datetime.strptime(
+                    vote[0].text.split("(")[1].replace(")", ""), "%m/%d/%Y"
+                ),
+                tally=parse_tally(vote[1:]),
             )
-            html = BeautifulSoup(resp.text, features="html5lib")
-            bills = [
-                dict(parse_qsl(urlparse(a["href"]).query))
-                for a in html.find("div", class_="alight").find_all("a")
-            ]
-            # Extract and yield each bill, handle exceptions
-            for b in bills:
-                try:
-                    yield self.fetch_bill(congress=b["congress"], billno=b["q"])
-                except (NotFoundError, ServerError) as exc:
-                    logger.error(exc.message)
-                    yield exc
-                except Exception as exc:
-                    logger.error(f"Exception at {b['q']}, congress {b['congress']}")
-                    raise exc
-            # Try to find the next button and advance if found
-            if html.find("a", string="Next\n"):
-                page += 1
-            else:
-                break
-
-    def fetch_bills(self, congress: int):
-        return list(self.generate_bills(congress))
-
-    def get_congresses(self):
-        resp = requests.get(
-            "https://legacy.senate.gov.ph/lis/leg_sys.aspx",
-            headers=self.session.headers,
-        )
-        html = BeautifulSoup(resp.content, features="html5lib")
-        congresses = [
-            int(dict(parse_qsl(link["href"].split("?")[1]))["congress"])
-            for link in html.find(id="div_ChangeCongress").find("ul").find_all("a")
+            for vote in votes
         ]
-        return congresses
 
-    def fetch_all_bills(self):
-        """
-        Generator function that returns all bills from all congresses.
-        """
-        congresses = self.get_congresses()
-        return list(chain(*(self.fetch_bills(congress) for congress in congresses)))
+    # Parse subtitle
+    subtitle = title[4].text.strip()
+    subtitle = subtitle.split("Filed on ")[1].split(" by")
+
+    # Construct Senate Bill
+    bill = SenateBill(
+        url=url + "?" + urlencode(params),
+        congress=congress,
+        billno=billno,
+        congress_text=title[0].text.strip(),
+        billno_text=title[2].text.strip(),
+        title=content.find("div", class_="lis_doctitle").text.strip(),
+        long_title=data["Long title"].text.strip(),
+        filing_date=datetime.datetime.strptime(subtitle[0], "%B %d, %Y"),
+        filers=(
+            [
+                Senator(name=f"{s[0]}, {s[1]}".strip())
+                for s in grouper(subtitle[1].split(", "), 2)
+            ]
+            if subtitle[1] != ""
+            else None
+        ),
+        links=(
+            [
+                Link(url=urljoin(url, t["href"]), name=t.text.strip())
+                for t in links.find_all("a")
+            ]
+            if (links := content.find("div", id="lis_download"))
+            else None
+        ),
+        scope=data["Scope"].text.strip(),
+        legislative_status=SenateBill.SenateBillStatus(
+            date=datetime.datetime.strptime(
+                re.findall(r"\((.+)\)", (s := data["Legislative status"].text.strip()))[
+                    0
+                ],
+                "%m/%d/%Y",
+            ),
+            item=re.findall(r"(.+) \(", s)[0],
+        ),
+        subjects=(
+            [
+                SenateBill.Subject(name=subject.text)
+                for subject in subjects
+                if subject.text != ""
+            ]
+            if (subjects := data.get("Subject(s)"))
+            else None
+        ),
+        primary_committee=(
+            [
+                SenateCommittee(name=committee.text, congress=congress)
+                for committee in committees.children
+                if committee.text != ""
+            ]
+            if (committees := data.get("Primary committee"))
+            else None
+        ),
+        secondary_committee=(
+            [
+                SenateCommittee(name=committee.text, congress=congress)
+                for committee in committees.children
+                if committee.text != ""
+            ]
+            if (committees := data.get("Secondary committee"))
+            else None
+        ),
+        committee_reports=(
+            [
+                Link(url=urljoin(url, report["href"]), name=report.text)
+                for report in reports.find_all("a")
+            ]
+            if (reports := data.get("Committee report"))
+            else None
+        ),
+        sponsors=(
+            [
+                Senator(name=f"{senator[0]}, {senator[1]}")
+                for senator in grouper(sponsors.text.split(", "), 2)
+            ]
+            if (sponsors := data.get("Sponsor(s)"))
+            else None
+        ),
+        cosponsors=(
+            [
+                Senator(name=f"{senator[0]}, {senator[1]}")
+                for senator in grouper(cosponsors.text.split(", "), 2)
+            ]
+            if (cosponsors := data.get("Co-sponsor(s)"))
+            else None
+        ),
+        document_certification=(
+            certification.text
+            if (certification := data.get("Document certification"))
+            else None
+        ),
+        floor_activity=(
+            [
+                SenateBill.FloorActivity(
+                    date=datetime.datetime.strptime(cols[0].text.strip(), "%m/%d/%Y"),
+                    parliamentary_status=cols[1].text.strip(),
+                    senators=(
+                        [
+                            Senator(name=senator.text.strip())
+                            for senator in cols[2].children
+                            if senator.text.strip() != ""
+                        ]
+                        if len(list(cols[2].children)) > 0
+                        else None
+                    ),
+                )
+                for cols in [
+                    row.find_all("td") for row in floor_activity.find_all("tr")
+                ][1:]
+            ]
+            if (floor_activity := data.get("Floor activity"))
+            else None
+        ),
+        votes=votes,
+        legislative_history=[
+            SenateBill.SenateBillStatus(
+                date=datetime.datetime.strptime(row[0].text.strip(), "%m/%d/%Y"),
+                item=row[1].text.strip(),
+            )
+            for row in (
+                row.find_all("td") for row in data["Legislative History"].find_all("tr")
+            )
+            if len(row) == 2
+        ],
+    )
+
+    return bill
+
+
+show_doc(SenateWebsite.fetch_bill)
+
+# %% ../notebooks/02-senate.ipynb 19
+from typing import Generator
+
+
+@patch
+def generate_bills(
+    self: SenateWebsite,
+    congress: int,  # Number of the congress from which to fetch bills
+) -> Generator[SenateBill | Exception, None, None]:
+    """
+    Generator function that eventually produces all bills from a congress.
+    """
+
+    page = 1
+    while True:
+        # Fetch and parse the page
+        resp = self.session.get(
+            url="http://legacy.senate.gov.ph/lis/leg_sys.aspx",
+            params={"type": "bill", "congress": congress, "p": page},
+        )
+        html = BeautifulSoup(resp.text, features="html5lib")
+        bills = [
+            dict(parse_qsl(urlparse(a["href"]).query))
+            for a in html.find("div", class_="alight").find_all("a")
+        ]
+        # Extract and yield each bill, handle exceptions
+        for b in bills:
+            try:
+                yield self.fetch_bill(congress=b["congress"], billno=b["q"])
+            except (NotFoundError, ServerError) as exc:
+                logger.error(exc.message)
+                yield exc
+            except Exception as exc:
+                logger.error(f"Exception at {b['q']}, congress {b['congress']}")
+                raise exc
+        # Try to find the next button and advance if found
+        if html.find("a", string="Next\n"):
+            page += 1
+        else:
+            break
+
+
+show_doc(SenateWebsite.generate_bills)
+
+# %% ../notebooks/02-senate.ipynb 22
+@patch
+def fetch_bills(
+    self: SenateWebsite, congress: int  # Congress from which to fetch bills
+) -> List[SenateBill]:
+    return list(self.generate_bills(congress))
+
+
+show_doc(SenateWebsite.fetch_bills)
+
+# %% ../notebooks/02-senate.ipynb 25
+@patch
+def get_congresses(self: SenateWebsite) -> List[int]:
+    resp = requests.get(
+        "https://legacy.senate.gov.ph/lis/leg_sys.aspx",
+        headers=self.session.headers,
+    )
+    html = BeautifulSoup(resp.content, features="html5lib")
+    congresses = [
+        int(dict(parse_qsl(link["href"].split("?")[1]))["congress"])
+        for link in html.find(id="div_ChangeCongress").find("ul").find_all("a")
+    ]
+    return congresses
+
+
+show_doc(SenateWebsite.get_congresses)
+
+# %% ../notebooks/02-senate.ipynb 28
+@patch
+def fetch_all_bills(self: SenateWebsite):
+    """
+    Returns all bills from all congresses.
+    """
+    congresses = self.get_congresses()
+    return list(chain(*(self.fetch_bills(congress) for congress in congresses)))
+
+
+show_doc(SenateWebsite.fetch_all_bills)

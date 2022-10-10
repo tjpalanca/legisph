@@ -19,6 +19,3 @@ _proc/
 _docs/
 .gitconfig
 .gitattributes
-
-# Sandbox 
-sandbox.ipynb

@@ -4,4 +4,6 @@ website:
       - index.ipynb
       - 00-core.ipynb
       - 01-website.ipynb
-      - 02-senate.ipynb
+      - 02A-senate-models.ipynb
+      - 02B-senate-website.ipynb
+      - 02C-senate-bill_status.ipynb

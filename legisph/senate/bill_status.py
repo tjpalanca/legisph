@@ -2,15 +2,15 @@
 
 # %% auto 0
 __all__ = ['parse_senate_bill_status', 'Introduced', 'FirstReading', 'OrganizationalBriefing', 'PendingInCommittee',
-           'CommitteeProceedings', 'Archived', 'CommitteeReportCalendaredForOrdinaryBusiness', 'TechnicalWorkingGroup',
-           'SubmittedCommitteeReport', 'ConsolidatedOrSubstitutedInCommitteeReport', 'ApprovedOnSecondReading',
-           'TransferredToCalendarForSpecialOrder', 'PeriodOfInterpellationClosed', 'SponsorshipSpeech',
-           'SponsorshipSpeechInsertedIntoRecord', 'ApprovedOnThirdReading', 'SentToHouseOfRepresentatives',
-           'IndividualAmendmentsOpened', 'IndividualAmendmentsClosed', 'CommitteeAmendmentsOpened',
-           'CommitteeAmendmentsClosed', 'CopiesDistributed', 'ConsolidatedWithApprovedBill', 'ApprovedByPresident',
-           'PendingSecondReading', 'ApprovedConferenceCommitteeReport', 'Interpellation',
-           'PendingInHouseOfRepresentatives', 'Withdrawn', 'Sponsored', 'VotesInFavor', 'VotesAgainst',
-           'VotesAbstained']
+           'CommitteeProceedings', 'CommitteeConsultation', 'Archived', 'CommitteeReportCalendaredForOrdinaryBusiness',
+           'TechnicalWorkingGroup', 'SubmittedCommitteeReport', 'ConsolidatedOrSubstitutedInCommitteeReport',
+           'ApprovedOnSecondReading', 'TransferredToCalendarForSpecialOrder', 'PeriodOfInterpellationClosed',
+           'SponsorshipSpeech', 'SponsorshipSpeechInsertedIntoRecord', 'ApprovedOnThirdReading',
+           'SentToHouseOfRepresentatives', 'IndividualAmendmentsOpened', 'IndividualAmendmentsClosed',
+           'CommitteeAmendmentsOpened', 'CommitteeAmendmentsClosed', 'CopiesDistributed',
+           'ConsolidatedWithApprovedBill', 'ApprovedByPresident', 'PendingSecondReading',
+           'ApprovedConferenceCommitteeReport', 'Interpellation', 'PendingInHouseOfRepresentatives', 'Withdrawn',
+           'Sponsored', 'VotesInFavor', 'VotesAgainst', 'VotesAbstained', 'LapsedIntoLaw', 'InquiryOfChair']
 
 # %% ../../notebooks/02C-senate-bill_status.ipynb 1
 import re
@@ -28,13 +28,10 @@ def parse_senate_bill_status(
 ):
     actions = []
     # Split the status into multiple ones if it contains newlines
-    if status.item.find(";\n") > -1:
-        statuses = [
-            SenateBill.SenateBillStatus(date=status.date, item=s)
-            for s in status.item.split(";\n")
-        ]
-    else:
-        statuses = [status]
+    statuses = [
+        SenateBill.SenateBillStatus(date=status.date, item=s)
+        for s in status.item.split(";\n")
+    ]
     for s in statuses:
         for c in classes:
             action, cycle = c.parse(s)
@@ -175,6 +172,21 @@ class CommitteeProceedings(SenateBill.SenateBillStatus):
         return (None, True)
 
 # %% ../../notebooks/02C-senate-bill_status.ipynb 31
+class CommitteeConsultation(SenateBill.SenateBillStatus):
+    """
+    Committees may perform stakeholder consultations or ocular inspections to increase
+    their understanding of the right form of legislation.
+    """
+
+    name: str = "Conducted Committee Consultation or Ocular"
+
+    @classmethod
+    def parse(cls, h):
+        if h.item == "Conducted CONSULTATION/OCULAR;":
+            return (cls(**h.dict()), False)
+        return (None, True)
+
+# %% ../../notebooks/02C-senate-bill_status.ipynb 34
 class Archived(SenateBill.SenateBillStatus):
     name: str = "Archived"
 
@@ -186,7 +198,7 @@ class Archived(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 34
+# %% ../../notebooks/02C-senate-bill_status.ipynb 37
 class CommitteeReportCalendaredForOrdinaryBusiness(SenateBill.SenateBillStatus):
     name: str = "Committe Report Calendared for Ordinary Business"
 
@@ -199,7 +211,7 @@ class CommitteeReportCalendaredForOrdinaryBusiness(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 37
+# %% ../../notebooks/02C-senate-bill_status.ipynb 40
 class TechnicalWorkingGroup(SenateBill.SenateBillStatus):
     """
     A technical working group is an ad hoc group of experts on a particular topic who
@@ -214,7 +226,7 @@ class TechnicalWorkingGroup(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 40
+# %% ../../notebooks/02C-senate-bill_status.ipynb 43
 class SubmittedCommitteeReport(SenateBill.SenateBillStatus):
     """
     A committee report describes the purpose and scope of the bill, explains any
@@ -231,7 +243,7 @@ class SubmittedCommitteeReport(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 42
+# %% ../../notebooks/02C-senate-bill_status.ipynb 45
 class ConsolidatedOrSubstitutedInCommitteeReport(SenateBill.SenateBillStatus):
     """
     In the Committee Report, a bill is combined with another bill or substituted with
@@ -240,14 +252,41 @@ class ConsolidatedOrSubstitutedInCommitteeReport(SenateBill.SenateBillStatus):
     """
 
     name: str = "Consolidated or Substituted in Committee Report"
+    substitute_bill: Optional[str]
+    committee_report: Optional[str]
 
     @classmethod
     def parse(cls, h):
         if h.item == "Consolidated/Substituted in the Committee Report":
             return (cls(**h.dict()), False)
+        slug1 = "SUBSTITUTED BY "
+        slug2 = " UNDER C.R. NO. "
+        if h.item.startswith(slug1) and h.item.find(slug2) > -1:
+            bill, report = h.item.split(slug2)
+            bill = bill.replace(slug1, "")
+            report = report.replace(".", "")
+            return (
+                cls(**h.dict(), substitute_bill=bill, committee_report=report),
+                True,
+            )
+        slug3 = " UNDER COMMITTEE REPORT NO. "
+        if h.item.startswith(slug1) and h.item.find(slug3) > -1:
+            bill, report = h.item.split(slug3)
+            bill = bill.replace(slug1, "")
+            report = report.replace(".", "")
+            return (
+                cls(**h.dict(), substitute_bill=bill, committee_report=report),
+                True,
+            )
+        if h.item.startswith(slug1):
+            bill = h.item.replace(slug1, "").replace(".", "")
+            return (
+                cls(**h.dict(), substitute_bill=bill),
+                True,
+            )
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 45
+# %% ../../notebooks/02C-senate-bill_status.ipynb 50
 class ApprovedOnSecondReading(SenateBill.SenateBillStatus):
     name: str = "Approved On Second Reading"
     with_amendments: bool
@@ -255,7 +294,10 @@ class ApprovedOnSecondReading(SenateBill.SenateBillStatus):
 
     @classmethod
     def parse(cls, h):
-        if h.item == "Approved on Second Reading with Amendments;":
+        if h.item in (
+            "Approved on Second Reading with Amendments;",
+            "Approved on Second Reading with amendments;",
+        ):
             return (cls(**h.dict(), with_amendments=True), False)
         if h.item == "Approved on Second Reading without Amendment;":
             return (cls(**h.dict(), with_amendments=False), False)
@@ -265,7 +307,7 @@ class ApprovedOnSecondReading(SenateBill.SenateBillStatus):
             return (cls(**h.dict(), with_amendments=True, considered=considered), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 49
+# %% ../../notebooks/02C-senate-bill_status.ipynb 54
 class TransferredToCalendarForSpecialOrder(SenateBill.SenateBillStatus):
     name: str = "Transferred to Calendar for Special Order"
 
@@ -275,21 +317,25 @@ class TransferredToCalendarForSpecialOrder(SenateBill.SenateBillStatus):
             "Transferred from the Calendar for Ordinary Business to the Calendar for Special Order;",
             "Transferred from Ordinary Business to Special Order;",
             "Assigned for Consideration by Special Order;",
+            "Assigned for consideration by Special Order;",
         ):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 52
+# %% ../../notebooks/02C-senate-bill_status.ipynb 57
 class PeriodOfInterpellationClosed(SenateBill.SenateBillStatus):
     name: str = "Period of Interpellation Closed"
 
     @classmethod
     def parse(cls, h):
-        if h.item == "Period of interpellation closed;":
+        if h.item in (
+            "Period of interpellation closed;",
+            "Period of interpellations closed;",
+        ):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 55
+# %% ../../notebooks/02C-senate-bill_status.ipynb 60
 class SponsorshipSpeech(SenateBill.SenateBillStatus):
     name: str = "Sponsorship Speech"
     senators: List[Senator]
@@ -339,9 +385,13 @@ class SponsorshipSpeech(SenateBill.SenateBillStatus):
                 )
             ]
             return (cls(**h.dict(), senators=senators), True)
+        slug8 = "Co-sponsorship speech of Senator "
+        if h.item.startswith(slug8):
+            senators = [Senator(name=h.item.replace(slug8, "").replace(";", ""))]
+            return (cls(**h.dict(), senators=senators), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 64
+# %% ../../notebooks/02C-senate-bill_status.ipynb 69
 class SponsorshipSpeechInsertedIntoRecord(SenateBill.SenateBillStatus):
     name: str = "Sponsorship Speech Inserted into Record"
 
@@ -351,17 +401,17 @@ class SponsorshipSpeechInsertedIntoRecord(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 67
+# %% ../../notebooks/02C-senate-bill_status.ipynb 72
 class ApprovedOnThirdReading(SenateBill.SenateBillStatus):
     name: str = "Approved on Third Reading"
 
     @classmethod
     def parse(cls, h):
-        if h.item == "Approved on Third Reading;":
+        if h.item in ("Approved on Third Reading;", "Approved on Third Reading"):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 70
+# %% ../../notebooks/02C-senate-bill_status.ipynb 75
 class SentToHouseOfRepresentatives(SenateBill.SenateBillStatus):
     name: str = "Sent to the House of Representatives"
 
@@ -371,7 +421,7 @@ class SentToHouseOfRepresentatives(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 73
+# %% ../../notebooks/02C-senate-bill_status.ipynb 78
 class IndividualAmendmentsOpened(SenateBill.SenateBillStatus):
     name: str = "Individual amendments opened"
 
@@ -383,7 +433,7 @@ class IndividualAmendmentsOpened(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 76
+# %% ../../notebooks/02C-senate-bill_status.ipynb 81
 class IndividualAmendmentsClosed(SenateBill.SenateBillStatus):
     name: str = "Individual amendments closed"
 
@@ -391,9 +441,11 @@ class IndividualAmendmentsClosed(SenateBill.SenateBillStatus):
     def parse(cls, h):
         if h.item == "Period of individual amendments closed;":
             return (cls(**h.dict()), False)
+        if h.item == "Period of amendments closed;":
+            return (cls(**h.dict()), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 79
+# %% ../../notebooks/02C-senate-bill_status.ipynb 84
 class CommitteeAmendmentsOpened(SenateBill.SenateBillStatus):
     name: str = "Committee amendments opened"
 
@@ -405,7 +457,7 @@ class CommitteeAmendmentsOpened(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 82
+# %% ../../notebooks/02C-senate-bill_status.ipynb 87
 class CommitteeAmendmentsClosed(SenateBill.SenateBillStatus):
     name: str = "Committee amendments closed"
 
@@ -413,9 +465,11 @@ class CommitteeAmendmentsClosed(SenateBill.SenateBillStatus):
     def parse(cls, h):
         if h.item == "Period of committee amendments closed;":
             return (cls(**h.dict()), False)
+        if h.item == "Period of amendments closed;":
+            return (cls(**h.dict()), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 85
+# %% ../../notebooks/02C-senate-bill_status.ipynb 90
 class CopiesDistributed(SenateBill.SenateBillStatus):
     name: str = "Copies Distributed to Senators"
 
@@ -424,11 +478,12 @@ class CopiesDistributed(SenateBill.SenateBillStatus):
         if h.item in (
             "Printed copies were distributed to the Senators;",
             "Printed Copies were distributed to the Senators;",
+            "Printed copies were electronically distributed to the Senators;",
         ):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 88
+# %% ../../notebooks/02C-senate-bill_status.ipynb 93
 class ConsolidatedWithApprovedBill(SenateBill.SenateBillStatus):
     name: str = "Consolidated with Approved Bill"
 
@@ -438,7 +493,7 @@ class ConsolidatedWithApprovedBill(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 91
+# %% ../../notebooks/02C-senate-bill_status.ipynb 96
 class ApprovedByPresident(SenateBill.SenateBillStatus):
     name: str = "Approved by the President"
 
@@ -446,9 +501,10 @@ class ApprovedByPresident(SenateBill.SenateBillStatus):
     def parse(cls, h):
         if h.item == "Approved by the President of the Philippines":
             return (cls(**h.dict()), False)
+        # if h.item.startswith("Approved and signed into law"):
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 94
+# %% ../../notebooks/02C-senate-bill_status.ipynb 99
 class PendingSecondReading(SenateBill.SenateBillStatus):
     name: str = "Pending Second Reading"
     type: str
@@ -460,7 +516,7 @@ class PendingSecondReading(SenateBill.SenateBillStatus):
             return (cls(**h.dict(), type=type), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 98
+# %% ../../notebooks/02C-senate-bill_status.ipynb 103
 class ApprovedConferenceCommitteeReport(SenateBill.SenateBillStatus):
     name: str = "Approved Conference Committee Report"
 
@@ -470,7 +526,7 @@ class ApprovedConferenceCommitteeReport(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 101
+# %% ../../notebooks/02C-senate-bill_status.ipynb 106
 class Interpellation(SenateBill.SenateBillStatus):
     name: str = "Interpellation"
     senators: List[Senator]
@@ -483,7 +539,7 @@ class Interpellation(SenateBill.SenateBillStatus):
             return (cls(**h.dict(), senators=senators), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 104
+# %% ../../notebooks/02C-senate-bill_status.ipynb 109
 class PendingInHouseOfRepresentatives(SenateBill.SenateBillStatus):
     name: str = "Pending in the House of Representatives"
 
@@ -493,17 +549,17 @@ class PendingInHouseOfRepresentatives(SenateBill.SenateBillStatus):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 107
+# %% ../../notebooks/02C-senate-bill_status.ipynb 112
 class Withdrawn(SenateBill.SenateBillStatus):
     name: str = "Withdrawn"
 
     @classmethod
     def parse(cls, h):
-        if h.item in ("Withdrawn", "WITHDRAWN."):
+        if h.item in ("Withdrawn", "WITHDRAWN.", "Withdrawn;"):
             return (cls(**h.dict()), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 110
+# %% ../../notebooks/02C-senate-bill_status.ipynb 115
 class Sponsored(SenateBill.SenateBillStatus):
     """
     When a Senator decides to become a proponent of a bill, they sponsor it. They decide
@@ -543,7 +599,7 @@ class Sponsored(SenateBill.SenateBillStatus):
             return (cls(**h.dict(), senators=senators), True)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 114
+# %% ../../notebooks/02C-senate-bill_status.ipynb 119
 class VotesInFavor(SenateBill.SenateBillStatus):
     """
     Senators have voted and some senators are in favor.
@@ -569,7 +625,7 @@ class VotesInFavor(SenateBill.SenateBillStatus):
             return (cls(**h.dict(), senators=senators), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 117
+# %% ../../notebooks/02C-senate-bill_status.ipynb 122
 class VotesAgainst(SenateBill.SenateBillStatus):
     """
     Senators have voted and some senators are in favor.
@@ -602,7 +658,7 @@ class VotesAgainst(SenateBill.SenateBillStatus):
             return (cls(**h.dict(), senators=senators), False)
         return (None, True)
 
-# %% ../../notebooks/02C-senate-bill_status.ipynb 121
+# %% ../../notebooks/02C-senate-bill_status.ipynb 126
 class VotesAbstained(SenateBill.SenateBillStatus):
     """
     Senators have voted and some senators have abstained from voting.
@@ -637,4 +693,29 @@ class VotesAbstained(SenateBill.SenateBillStatus):
                 else []
             )
             return (cls(**h.dict(), senators=senators), False)
+        return (None, True)
+
+# %% ../../notebooks/02C-senate-bill_status.ipynb 131
+class LapsedIntoLaw(SenateBill.SenateBillStatus):
+    """
+    When the President fails to sign a bill into law within a set amount of time, the
+    bill is considered to have lapsed into law and will be as if he had approved it.
+    """
+
+    name: str = "Lapsed into Law"
+
+    @classmethod
+    def parse(cls, h):
+        if h.item in ("Lapsed Into Law"):
+            return (cls(**h.dict()), False)
+        return (None, True)
+
+# %% ../../notebooks/02C-senate-bill_status.ipynb 134
+class InquiryOfChair(SenateBill.SenateBillStatus):
+    name: str = "Inquiry of the Chair"
+
+    @classmethod
+    def parse(cls, h):
+        if h.item in ("Inquiry of the Chair;"):
+            return (cls(**h.dict()), False)
         return (None, True)

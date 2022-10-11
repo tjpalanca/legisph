@@ -9,7 +9,8 @@ __all__ = ['parse_senate_bill_status', 'Introduced', 'FirstReading', 'Organizati
            'IndividualAmendmentsOpened', 'IndividualAmendmentsClosed', 'CommitteeAmendmentsOpened',
            'CommitteeAmendmentsClosed', 'CopiesDistributed', 'ConsolidatedWithApprovedBill', 'ApprovedByPresident',
            'PendingSecondReading', 'ApprovedConferenceCommitteeReport', 'Interpellation',
-           'PendingInHouseOfRepresentatives', 'Withdrawn', 'Sponsored']
+           'PendingInHouseOfRepresentatives', 'Withdrawn', 'Sponsored', 'VotesInFavor', 'VotesAgainst',
+           'VotesAbstained']
 
 # %% ../../notebooks/02C-senate-bill_status.ipynb 1
 import re
@@ -26,12 +27,21 @@ def parse_senate_bill_status(
     classes: list,  # List of classes through which to cycle
 ):
     actions = []
-    for c in classes:
-        action, cycle = c.parse(status)
-        if action is not None:
-            actions.append(action)
-        if not cycle:
-            break
+    # Split the status into multiple ones if it contains newlines
+    if status.item.find(";\n") > -1:
+        statuses = [
+            SenateBill.SenateBillStatus(date=status.date, item=s)
+            for s in status.item.split(";\n")
+        ]
+    else:
+        statuses = [status]
+    for s in statuses:
+        for c in classes:
+            action, cycle = c.parse(s)
+            if action is not None:
+                actions.append(action)
+            if not cycle:
+                break
     return actions
 
 
@@ -489,12 +499,19 @@ class Withdrawn(SenateBill.SenateBillStatus):
 
     @classmethod
     def parse(cls, h):
-        if h.item == "Withdrawn":
+        if h.item in ("Withdrawn", "WITHDRAWN."):
             return (cls(**h.dict()), False)
         return (None, True)
 
 # %% ../../notebooks/02C-senate-bill_status.ipynb 110
 class Sponsored(SenateBill.SenateBillStatus):
+    """
+    When a Senator decides to become a proponent of a bill, they sponsor it. They decide
+    when debate is ended on a bill and also delivers a sponsorship speech. A bill can
+    have multiple sponsors and Senators may become co-sponsors at any point in the
+    process.
+    """
+
     name: str = "Sponsored"
     senators: List[Senator]
 
@@ -524,4 +541,100 @@ class Sponsored(SenateBill.SenateBillStatus):
             senators = h.item.replace(slug4, "").replace(";", "")
             senators = [Senator(name=s.strip()) for s in senators.split(" and ")]
             return (cls(**h.dict(), senators=senators), True)
+        return (None, True)
+
+# %% ../../notebooks/02C-senate-bill_status.ipynb 114
+class VotesInFavor(SenateBill.SenateBillStatus):
+    """
+    Senators have voted and some senators are in favor.
+    """
+
+    name: str = "Votes In Favor"
+    vote: str = "In Favor"
+    senators: List[Senator]
+
+    @classmethod
+    def parse(cls, h):
+        slug = "In favor:"
+        if h.item.startswith(slug):
+            senators = h.item.replace(slug, "").replace(";", "").strip()
+            senators = re.sub("\([1-9]+\)", "", senators)
+            senators = re.sub("Senator[s]", "", senators)
+            split = re.split(",|and", senators)
+            senators = (
+                [Senator(name=s.strip()) for s in split]
+                if senators.lower().strip() not in ("(none)", "n o n e")
+                else []
+            )
+            return (cls(**h.dict(), senators=senators), False)
+        return (None, True)
+
+# %% ../../notebooks/02C-senate-bill_status.ipynb 117
+class VotesAgainst(SenateBill.SenateBillStatus):
+    """
+    Senators have voted and some senators are in favor.
+    """
+
+    name: str = "Votes Against"
+    vote: str = "Against"
+    senators: List[Senator]
+
+    @classmethod
+    def parse(cls, h):
+        slug1 = "Against:"
+        slug2 = "Against"
+        if h.item.startswith(slug1) or h.item.startswith(slug2):
+            senators = (
+                h.item.replace(slug1, "")
+                .replace(slug2, "")
+                .replace(":", "")
+                .replace(";", "")
+                .strip()
+            )
+            senators = re.sub("\([1-9]+\)", "", senators)
+            senators = re.sub("Senator[s]", "", senators)
+            split = re.split(",|and", senators)
+            senators = (
+                [Senator(name=s.strip()) for s in split]
+                if senators.lower().strip() not in ("(none)", "n o n e")
+                else []
+            )
+            return (cls(**h.dict(), senators=senators), False)
+        return (None, True)
+
+# %% ../../notebooks/02C-senate-bill_status.ipynb 121
+class VotesAbstained(SenateBill.SenateBillStatus):
+    """
+    Senators have voted and some senators have abstained from voting.
+    """
+
+    name: str = "Votes Abstained"
+    vote: str = "Abstained"
+    senators: List[Senator]
+
+    @classmethod
+    def parse(cls, h):
+        slug1 = "Abstention:"
+        slug2 = "Abstain:"
+        slug3 = "Abstention"
+        if (
+            h.item.startswith(slug1)
+            or h.item.startswith(slug2)
+            or h.item.startswith(slug3)
+        ):
+            senators = (
+                h.item.replace(slug1, "")
+                .replace(slug2, "")
+                .replace(slug3, "")
+                .replace(";", "")
+                .strip()
+            )
+            senators = re.sub("\([1-9]+\)", "", senators)
+            split = re.split(",|and", senators)
+            senators = (
+                [Senator(name=s.strip()) for s in split]
+                if senators.lower().strip() not in ("(none)", "n o n e")
+                else []
+            )
+            return (cls(**h.dict(), senators=senators), False)
         return (None, True)

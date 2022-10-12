@@ -299,7 +299,11 @@ class ApprovedOnSecondReading(SenateBill.SenateBillStatus):
             "Approved on Second Reading with amendments;",
         ):
             return (cls(**h.dict(), with_amendments=True), False)
-        if h.item == "Approved on Second Reading without Amendment;":
+        if h.item in (
+            "Approved on Second Reading without Amendment;",
+            "Approved on Second Reading without Amendments;",
+            "Approved on Second Reading without amendment;",
+        ):
             return (cls(**h.dict(), with_amendments=False), False)
         slug1 = "Approved on Second Reading with Amendments, taking into consideration "
         if h.item.startswith(slug1):

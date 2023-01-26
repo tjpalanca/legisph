@@ -18,29 +18,13 @@ class Senator(BaseModel):
 
     name: str
 
-    def __hash__(self):
-        return hash(self.name)
-
-    def __eq__(self, other):
-        if not isinstance(other, Senator):
-            return False
-        return self.name == other.name
-
-# %% ../../notebooks/02A-senate-models.ipynb 8
+# %% ../../notebooks/02A-senate-models.ipynb 7
 class SenateCommittee(BaseModel):
     """A committee in the Senate"""
 
     name: str
 
-    def __hash__(self):
-        return hash(self.name)
-
-    def __eq__(self, other):
-        if not isinstance(other, SenateCommittee):
-            return False
-        return self.name == other.name
-
-# %% ../../notebooks/02A-senate-models.ipynb 11
+# %% ../../notebooks/02A-senate-models.ipynb 9
 class SenateBill(BaseModel):
     """
     These are general measures, which if passed upon, may become laws.
@@ -53,7 +37,7 @@ class SenateBill(BaseModel):
     form and signed by the President or repassed by Congress over a presidential
     veto, they become laws.
 
-    [Source](http://legacy.senate.gov.ph/about/legpro.asp)
+    [Definition Source](http://legacy.senate.gov.ph/about/legpro.asp)
     """
 
     class SenateBillStatus(BaseModel):

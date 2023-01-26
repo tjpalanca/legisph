@@ -6,8 +6,9 @@ __all__ = ['SenateWebsite']
 # %% ../../notebooks/02B-senate-website.ipynb 1
 import datetime
 import re
-import requests
 
+from requests import Response
+from datetime import timedelta
 from bs4 import BeautifulSoup, NavigableString
 from itertools import islice, chain
 from urllib.parse import urljoin, urlencode, parse_qsl, urlparse
@@ -16,7 +17,7 @@ from pathlib import Path
 from diskcache import Cache
 from fastcore.utils import patch
 from nbdev.showdoc import show_doc
-from typing import List
+from typing import List, Generator, Union
 
 from ..website import Website, NotFoundError, ServerError, Link
 from ..core import logger
@@ -40,13 +41,14 @@ def fetch_bill(
     self: SenateWebsite,
     congress: int,  # Congress Number
     billno: str,  # Bill number (in the format SBN-XXXX)
-) -> requests.Response:
+    expire_after: Union[timedelta, int] = -1,  # Passed to CachedSession.get
+) -> Response:
     # Initial parameters
     url = "http://legacy.senate.gov.ph/lis/bill_res.aspx"
     params = {"q": billno, "congress": congress}
 
     # Initial call to get form session parameters
-    resp = self.session.get(url=url, params=params)
+    resp = self.session.get(url=url, params=params, expire_after=expire_after)
     html = BeautifulSoup(resp.text, features="html5lib")
 
     # Handle error cases
@@ -256,13 +258,11 @@ def fetch_bill(
 show_doc(SenateWebsite.fetch_bill)
 
 # %% ../../notebooks/02B-senate-website.ipynb 8
-from typing import Generator
-
-
 @patch
 def generate_bills(
     self: SenateWebsite,
     congress: int,  # Number of the congress from which to fetch bills
+    expire_after: Union[int, timedelta] = -1,  # Cache expiration
 ) -> Generator[SenateBill | Exception, None, None]:
     """
     Generator function that eventually produces all bills from a congress.
@@ -274,6 +274,7 @@ def generate_bills(
         resp = self.session.get(
             url="http://legacy.senate.gov.ph/lis/leg_sys.aspx",
             params={"type": "bill", "congress": congress, "p": page},
+            expire_after=expire_after,
         )
         html = BeautifulSoup(resp.text, features="html5lib")
         bills = [
@@ -283,7 +284,9 @@ def generate_bills(
         # Extract and yield each bill, handle exceptions
         for b in bills:
             try:
-                yield self.fetch_bill(congress=b["congress"], billno=b["q"])
+                yield self.fetch_bill(
+                    congress=b["congress"], billno=b["q"], expire_after=expire_after
+                )
             except (NotFoundError, ServerError) as exc:
                 logger.error(exc.message)
                 yield exc
@@ -302,19 +305,24 @@ show_doc(SenateWebsite.generate_bills)
 # %% ../../notebooks/02B-senate-website.ipynb 11
 @patch
 def fetch_bills(
-    self: SenateWebsite, congress: int  # Congress from which to fetch bills
+    self: SenateWebsite,
+    congress: int,  # Congress from which to fetch bills
+    expire_after: Union[int, timedelta] = -1,  # Cache expiration
 ) -> List[SenateBill]:
-    return list(self.generate_bills(congress))
+    return list(self.generate_bills(congress, expire_after=expire_after))
 
 
 show_doc(SenateWebsite.fetch_bills)
 
-# %% ../../notebooks/02B-senate-website.ipynb 14
+# %% ../../notebooks/02B-senate-website.ipynb 13
 @patch
-def get_congresses(self: SenateWebsite) -> List[int]:
-    resp = requests.get(
+def get_congresses(
+    self: SenateWebsite, expire_after=0  # Cache expiration time
+) -> List[int]:
+    resp = self.session.get(
         "https://legacy.senate.gov.ph/lis/leg_sys.aspx",
         headers=self.session.headers,
+        expire_after=expire_after,
     )
     html = BeautifulSoup(resp.content, features="html5lib")
     congresses = [
@@ -326,14 +334,27 @@ def get_congresses(self: SenateWebsite) -> List[int]:
 
 show_doc(SenateWebsite.get_congresses)
 
-# %% ../../notebooks/02B-senate-website.ipynb 17
+# %% ../../notebooks/02B-senate-website.ipynb 16
 @patch
-def fetch_all_bills(self: SenateWebsite):
+def fetch_all_bills(
+    self: SenateWebsite,
+    refresh_current_congress: bool = True,  # Do not use the cache for the current congress
+):
     """
     Returns all bills from all congresses.
     """
     congresses = self.get_congresses()
-    return list(chain(*(self.fetch_bills(congress) for congress in congresses)))
+    if refresh_current_congress:
+        current_congress = max(congresses)
+        congresses.remove(current_congress)
+        return list(
+            chain(
+                self.fetch_bills(current_congress, expire_after=0),
+                *(self.fetch_bills(congress) for congress in congresses)
+            )
+        )
+    else:
+        return list(chain(*(self.fetch_bills(congress) for congress in congresses)))
 
 
 show_doc(SenateWebsite.fetch_all_bills)

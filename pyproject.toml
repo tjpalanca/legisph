@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "legisph"
-version = "0.2.0"
+version = "0.2.1"
 description = "Legislative Analysis of the Philippines"
 authors = ["TJ P <mail@tjpalanca.com>"]
 license = "CC BY-NC-ND 4.0"

@@ -5,7 +5,7 @@ __all__ = ['Senator', 'SenateCommittee', 'SenateBill']
 
 # %% ../../notebooks/02A-senate-models.ipynb 1
 import datetime
-import black
+import rich
 
 from pydantic import BaseModel
 from typing import Dict, Optional, List
@@ -65,23 +65,20 @@ class SenateBill(BaseModel):
     title: str
     long_title: str
     filing_date: datetime.date
-    filers: Optional[List[Senator]]
-    links: Optional[List[Link]]
+    filers: Optional[List[Senator]] = None
+    links: Optional[List[Link]] = None
     scope: str
     legislative_status: SenateBillStatus
-    subjects: Optional[List[Subject]]
-    primary_committee: Optional[List[SenateCommittee]]
-    secondary_committee: Optional[List[SenateCommittee]]
-    committee_reports: Optional[List[Link]]
-    sponsors: Optional[List[Senator]]
-    cosponsors: Optional[List[Senator]]
-    document_certification: Optional[str]
+    subjects: Optional[List[Subject]] = None
+    primary_committee: Optional[List[SenateCommittee]] = None
+    secondary_committee: Optional[List[SenateCommittee]] = None
+    committee_reports: Optional[List[Link]] = None
+    sponsors: Optional[List[Senator]] = None
+    cosponsors: Optional[List[Senator]] = None
+    document_certification: Optional[str] = None
     floor_activity: Optional[List[FloorActivity]]
     votes: Optional[List[Vote]]
     legislative_history: List[SenateBillStatus]
 
     def __str__(self):
         return f"[{self.billno}] {self.title}"
-
-    def __repr__(self):
-        return black.format_str(super().__repr__(), mode=black.Mode())

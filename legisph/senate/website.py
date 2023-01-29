@@ -6,6 +6,7 @@ __all__ = ['SenateWebsite']
 # %% ../../notebooks/02B-senate-website.ipynb 1
 import datetime
 import re
+import pickle
 
 from requests import Response
 from datetime import timedelta

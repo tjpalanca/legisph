@@ -6,7 +6,6 @@ __all__ = ['SenateWebsite']
 # %% ../../notebooks/02B-senate-website.ipynb 1
 import datetime
 import re
-import pickle
 
 from requests import Response
 from datetime import timedelta
@@ -29,6 +28,7 @@ class SenateWebsite(Website):
     """
 
     def __init__(self, cache_dir=Path(".cache/senate"), **kwargs):
+        cache_dir = cache_dir.absolute()
         super().__init__("senate_requests", cache_dir=cache_dir, **kwargs)
         self.cache = Cache(str(cache_dir / "senate_cache"))
         if hasattr(self, "fetch_bills"):

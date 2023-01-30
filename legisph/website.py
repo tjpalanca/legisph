@@ -18,10 +18,10 @@ class Website:
 
     def __init__(
         self,
-        cache_name: str,
-        cache_dir: Path,
-        cache_methods: tuple = ("GET", "HEAD", "POST"),
-        user_agent: str = "legisph (code@tjpalanca.com)",
+        cache_name: str,  # Name of the cache
+        cache_dir: Path,  # Path in which to store the cache
+        cache_methods: tuple = ("GET", "HEAD", "POST"),  # Methods to cache
+        user_agent: str = "legisph (code@tjpalanca.com)",  # User agent when scraping
     ):
         cache_dir.mkdir(exist_ok=True, parents=True)
         self.session = CachedSession(
